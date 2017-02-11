@@ -1,0 +1,156 @@
+---
+title: "FDMart Grocery Market Basket Analysis"
+author: "Ignacio Faria"
+date: "February 2, 2017"
+output:
+  html_document: default
+  html_notebook: default
+  pdf_document: default
+  word_document: default
+---
+
+**FDMart Grocery** specializes in fresh vegetables and fruits, and in order to better understand our customers and their purchasing behavior, we will investigate purchasing patterns regarding:
+
+1. Alcoholic Beverages - these only include *wine* and/or *beer* purchases
+2. Canned and Fresh Vegetables and Fruits - all vegetables and fruits are grouped and none appear individually
+3. Large and Small Transactions - transactions with *5* items compared to *2*
+4. Quick-to-Serve Meats and Uncooked Meats - meats that are cooked, sliced (deli meats), and packaged as opposed to *frozen* or *fresh* meats (chicken and fish)
+
+This [large transaction dataset](https://bb.csueastbay.edu/bbcswebdav/pid-2386200-dt-content-rid-5479622_1/courses/20171_ITM_6285_01_1/transactions.txt) contains over *300,000 items* purchased with *106 unique products*. The rules generated in this analysis are parametrized to *at least 1%* of each transaction, and each transaction has *at least a 50% association* with the subsequent purchase.
+
+## Overview of the Data
+```{r Overview of the Data, message=FALSE, warning=FALSE, include=FALSE}
+library(arules)
+library(arulesViz)
+setwd("C:/Users/Isaac/Desktop/ITM 6285")
+groceryt<-read.transactions("transactions.txt", format="single", cols = c(1,2), sep=",")
+grules <- apriori(groceryt, parameter = list(support= 0.01, confidence=0.5))
+```
+
+Exploratory data analysis tells us that:
+
+* The data contain *64,808* transactions, with **Fresh Vegetables** and **Fresh Fruit** as the most frequently purchased products.
+
+* The transaction sizes are mostly spread between *3 to 6* items per purchase, with the rest of the data being heavily skewed to the right.
+
+* The great majority of **rules** contain either *3* or *4* products.
+
+* *Fresh Vegetables*, *Fresh Fruit*, *Canned Vegetables*, and *Wine* are of particular interest. They are among the top selling products, and are the focus of several parts of this analysis.
+
+It is important to recognize that *Fresh Vegetables* are included in nearly 30% of transactions. Because of this, many associations in this analysis would suggest that increasing sales of nearly anything would increase sales of *Fresh Vegetables*. This is likely not the case.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.height=3, fig.width=5, fig.align='center'}
+plot(grules, measure=c("support", "confidence"), shading="lift", main="Grocery Association Rules (7501 Rules)", col=rainbow(max(size(grules))))
+```
+
+# Purchacing Patterns Related to Wine and Beer
+
+Purching patterns with *wine* and/or *beer* were not nearly as frequent as others; infact, *beer* was never found to be associated with anything. The following association rules show that the purchasing of *wine* is highly associated with the purchasing of *Fresh Vegetables*.
+
+```{r Wine and Beer, echo=FALSE, message=FALSE, warning=FALSE}
+AlcRules.l<- subset(grules, subset = lhs %in% c("Beer","Wine") & size(grules) >= 1)
+AlcRules.r <- subset(grules, subset = rhs %in% c("Beer","Wine") & size(grules) >= 1)
+options(digits=4)
+```
+```{r Wine and Beer Inspection, echo=FALSE, fig.align="center", out.width='80%'}
+inspect(AlcRules.l)
+inspect(AlcRules.r)
+```
+
+Because *Fresh Vegetables* are so frequent in this dataset, `lift` would be a better measure of product purchase associations for *Wine*.  *Sauces*, *Fresh Chicken*, and *Candles* appear to best predict *wine* purchases.  
+
+It appears that wine purchases are likely motivated by customers who want to have a better dinner experience.
+
+# Canned vs Fresh Vegetables and Fruits
+
+1) Canned Vegetables and Fruits
+
+Unstandably, the Apriori algorithm produced many rules here. We found no rules associated with **Canned Fruit**. Also, there were far more rules regarding **Fresh Vegetables** than **Fresh Fruits**.  **Canned Vegetables** were almost always paired with **Fresh Vegetables**, as was *Sour Cream* and *Jam*.
+
+```{r, message=FALSE, warning=FALSE, include=FALSE}
+crules.r <- subset(grules, subset = rhs %pin% "Canned" & size(grules)>3)
+crules.l <- subset(grules, subset = lhs %pin% "Canned" & size(grules)>3)
+summary(crules.r);summary(crules.l)
+```
+
+2) Fresh Vegetables and Fruits
+
+We have 494 rules predicting the purchase of fresh produce, and 1512 rules including fresh produce. These rules had a must lower `lift` than any other group, due to their frequency. **Fresh Vegetables** and **Fresh Fruits** were almost always paired together. *Pasta*, *Rice*, *Jelly*, *Juice* and *Pancake Mix* were the most frequenct associations here.
+
+
+```{r, message=FALSE, warning=FALSE, include=FALSE}
+frules.r <- subset(grules, subset = rhs %pin% "Fresh" & size(grules)>3)
+frules.l <- subset(grules, subset = lhs %pin% "Fresh" & size(grules)>3)
+summary(frules.r);summary(frules.l)
+```
+
+```{r, echo=FALSE}
+inspect(frules.r[1:5]);inspect(frules.l[1:5])
+```
+
+
+# Small and Large Transactions
+
+We have 32 rules for small transactions and 400 rules for large transactions
+```{r, include=FALSE}
+srules <- subset(grules, subset = size(grules)==2)
+lrules <- subset(grules, subset = size(grules)==5)
+summary(srules);summary(lrules)
+```
+
+## Small Transactions
+
+These transactions seem to have a much lower level of confidence and lift than the previous rules we have seen. None appear to be of particular interest except for *Sauces* and *Wine*, which had a lift of 5, indicating a decently positive correlation.
+
+```{r, echo=FALSE}
+plot(srules, method="grouped", main="Grouped Matrix for Small Transaction Rules")
+```
+
+
+## Large Transactions
+
+Large transactions have much higher confidence and lift levels than the small transactions. These 3 large transactions in particular should strong associations.
+
+```{r}
+inspect(lrules[3:5])
+```
+
+
+# Meats: Quick-To-Serve and Uncooked Meats
+## Quick-to-Serve
+These may not appear intuitive to most people, so the code is available to see (qmeat is "quick meats" and smeat is "slow meats").
+
+```{r}
+qmeat <- c("Bologna","Deli Meats", "Dried Meat","Hot Dogs")
+smeat <- c("Fresh Chicken", "Frozen Chicken", "Hamburger", "Fresh Fish")
+```
+
+114 rules were generated and the only *Quick-to-serve* meat that made any associations was *Deli Meat*. *Ice Cream* and *Deodorizers*, seem to be most closely associated with it.
+
+```{r, message=FALSE, warning=FALSE, include=FALSE}
+qmrules.l <- subset(grules, subset = lhs %in% qmeat & size(grules) >= 3)
+qmrules.r <- subset(grules, subset = rhs %in% qmeat & size(grules) >= 3)
+summary(qmrules.l); summary(qmrules.r);
+
+smrules.l <- subset(grules, subset = lhs %in% smeat & size(grules) >= 3)
+smrules.r <- subset(grules, subset = rhs %in% smeat & size(grules) >= 3)
+summary(smrules.l);summary(smrules.r);
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+inspect(qmrules.l[3:4])
+```
+
+## Cook-to-serve
+
+977 rules left hand side. 347 rules right hand side. *Fresh Chicken* and *Frozen Chicken* appear to be the most frequent *cook-to-serve* meats with rules. *Fresh Chicken* is highly associated with *Wine* and *Fresh Vegetables*.  *Frozen Chicken* is very highly associated with *Shrimp* and *Waffles*, which are both typically sold frozen as well.  *Deodorizers* appear to be correlated with *Frozen Chicken* as well.
+```{r, echo=FALSE, fig.width=7}
+options(digits=2)
+inspect(smrules.r[2:6])
+```
+# Summary
+In conclusion, these associations indicate:
+1. **Wine** sales were largely associated with *Fresh Chicken*, *Candles*, and *Sauces*, indicating a customer who wants to make a special dinner. No **Beer** associations were made.
+2. **Canned Vegetables** were associated with *Sour Cream* and *Jam*. No **Canned Fruit** associations were made.  **Fresh Vegetables** and **Fresh Fruits** showed much stronger `lift` correlations and were most associated with *Pasta*, *Rice*, *Jelly*, *Juice*, and *Pancake Mix*.
+3. Small Transactions gave little perspective on our customers, except for reinforcing that *Sauce* was associated with *Wine*. On the other hand, Large Transactions showed very strong correlations indicating that *Frozen Chicken*, *Cottage Cheese*, and *Deodorizers* can strongly be predicted.
+4. Quick-to-Serve Meats only associated with *Deli Meats*, which were strongly correlated with *Ice Cream* and *Deodorizers* purchases.  *Frozen Chicken* was strongly associated with other frozen products, specifically *Shrimp* and *Waffles*.
