@@ -1,0 +1,262 @@
+---
+title: "Autism Spectrum Analysis"
+author: "Ignacio Faria"
+date: "March 16, 2017"
+output:
+  word_document: default
+  pdf_document: default
+  html_document: default
+---
+
+# Introduction
+
+Mental health care is a large industry that directly influences the quality of life of many people. Data in the industry is mostly left to surveys which are often filled out very subjectively; the surveys tyically include likert scales and can easily be affected by the client's mood. This makes finding patterns and associations in these data vary greatly. This is particularly true for people who lie within the autism spectrum. This analysis seeks to find patterns and associations of people who are within the autism spectrum.
+
+## The Data
+
+The dataset being analyzed contains surveys of people who were treated for various mental health conditions. The surveys were administered upon arrival, departure, 180 days after departure, and a year after. After being cleaned, the data contains 1800 unique patients with 13 attributes. Some of the key attributes in these dataset are the scores of their evaluations, learning disabilities, anxiety issues, substance abuse, and the clients' ages.
+
+## Methods
+
+Clients who are recorded as *yes* on the **spectrum** attribute are the focus of this analysis. A frequent pattern mining algorithm (apriori) will be implemented to see if there are any patterns that are highly associated with these clients. To do this, the continuous variables will be discretized according to their interquartile ranges. After this, a decision tree will be used to see how these clients are classified. The decision tree will use 10 fold cross-validation, and have a minimum prune threshold of 15.
+
+```{r, message=FALSE, warning=FALSE, include=FALSE}
+setwd("C:/Users/Isaac/Desktop/ITM 6285/Project")
+adult<-read.csv("adult03-06-17.csv")
+library(dplyr)
+library(arules)
+library(arulesViz)
+library(doParallel)
+cl <- makeCluster(3)  
+registerDoParallel(cl)  
+```
+
+```{r Cleaning the Data 1, echo=FALSE, message=FALSE, warning=FALSE}
+# what does it take to make the bottom line of code work
+# as(adult, "transactions")?
+
+keep<-c(5:18,20:23)
+adult2<-adult
+keep<-c(5:18,20:23)
+a3<-adult[,keep]
+summary(a3)
+# The variables "instance" records the stage at which the respondant recorded the instance i.e. A0 is when they arrived, D0 is the day of their departure, D180 is 180 days after their departure, and D365 is a year after their departure.
+
+# Only using instances of D0, as to reduce redundant information
+a1<-filter(a3, instance=="D0")
+a1<-droplevels(a1)
+```
+
+```{r Cleaning the Data 2, message=FALSE, warning=FALSE, include=FALSE}
+# remove adhd, opp_defiance, trauma_related, instance, as they do not contribute to the predictability of anything. Ethnicity is included in here, since there are far too many missing variables that would convolute the alogrithms predictability.
+remove <- c(5,8,12,13,14)
+a1<-a1[,-remove]
+
+# remove unlabeled gender levels to remove noise
+a1<- a1 %>% filter(gender=="FEMALE"|gender=="MALE") %>% droplevels()
+# Length of stay needed to be cleaned, so missing values were dropped
+a<-a1 %>% filter(length_of_stay != "NA") %>% droplevels()
+```
+
+```{r Discretize the Data, message=FALSE, warning=FALSE, include=FALSE}
+#discreteize the continuous variables according to their respective inter-quartile ranges. This is necessary for pattern mining, and it also simplifies the decision tree.
+
+#Discretize length of stay
+a$length_of_stay1[a$length_of_stay<=58]<-"short"
+a$length_of_stay1[a$length_of_stay>58 & a$length_of_stay<=75]<-"mid short"
+a$length_of_stay1[a$length_of_stay>75 & a$length_of_stay<=93]<-"mid long"
+a$length_of_stay1[a$length_of_stay>93]<-"long"
+a$length_of_stay<-factor(a$length_of_stay1, ordered=T, levels = c("short", "mid short", "mid long", "long"))
+a<-a[,-14]
+
+#Discretize age
+a$age_at_admit1[a$age_at_admit<=19]<-"young"
+a$age_at_admit1[a$age_at_admit>19 & a$age_at_admit<=21]<-"mid young"
+a$age_at_admit1[a$age_at_admit>21 & a$age_at_admit<=25]<-"mid older"
+a$age_at_admit1[a$age_at_admit>25]<-"older"
+a$age_at_admit<-factor(a$age_at_admit1, ordered=T, levels = c("young", "mid young", "mid older", "older"))
+a<-a[,-14]
+
+#Discretize SD score
+a$score_SD1[a$score_SD<=18]<-"low"
+a$score_SD1[a$score_SD>18 & a$score_SD<=26]<-"mid low"
+a$score_SD1[a$score_SD>26 & a$score_SD<=36]<-"mid high"
+a$score_SD1[a$score_SD>36]<-"high"
+a$score_SD<-factor(a$score_SD1, ordered=T, levels = c("low", "mid low", "mid high", "high"))
+a<-a[,-14]
+
+#Discretize IR score
+a$score_IR1[a$score_IR<=8]<-"low"
+a$score_IR1[a$score_IR>8 & a$score_IR<=12]<-"mid low"
+a$score_IR1[a$score_IR>12 & a$score_IR<=16]<-"mid high"
+a$score_IR1[a$score_IR>16]<-"high"
+a$score_IR<-factor(a$score_IR1, ordered=T, levels = c("low", "mid low", "mid high", "high"))
+a<-a[,-14]
+
+#Discretize SR score
+a$score_SR1[a$score_SR<=6]<-"low"
+a$score_SR1[a$score_SR>6 & a$score_SR<=9]<-"mid low"
+a$score_SR1[a$score_SR>9 & a$score_SR<=13]<-"mid high"
+a$score_SR1[a$score_SR>13]<-"high"
+a$score_SR<-factor(a$score_SR1, ordered=T, levels = c("low", "mid low", "mid high", "high"))
+a<-a[,-14]
+
+#Discretize SCORE value
+a$score_SCORE1[a$score_SCORE<=33]<-"low"
+a$score_SCORE1[a$score_SCORE>33 & a$score_SCORE<=48]<-"mid low"
+a$score_SCORE1[a$score_SCORE>48 & a$score_SCORE<=63]<-"mid high"
+a$score_SCORE1[a$score_SCORE>63]<-"high"
+a$score_SCORE<-factor(a$score_SCORE1, ordered=T, levels = c("low", "mid low", "mid high", "high"))
+a<-a[,-14]
+a$spectrum<-ordered(a$spectrum, levels = c("y","n"))#the levels need to be reordered.
+summary(a)
+```
+
+### Frequent Patterns
+
+Clients who are in the autism spectrum occur very infrequntly in the data, so the rules will be made very loosely; frequency is determined at 1.0% of occurance with 50% confidence (prior probability).
+```{r Apriori, echo=FALSE, message=FALSE, warning=FALSE}
+# Now, to turn the adults dataset into transaction format to run the apriori frequent pattern mining algorithm on.
+at<-as(a, "transactions")
+arules <- apriori(at, parameter = list(support= 0.01, confidence=0.5, maxlen=20))
+
+#plot(arules, measure=c("support", "confidence"), shading="lift", main="Psy Evalutation Rules (505,259 Rules)", col=rainbow(max(size(arules))))
+
+#This dataset required very loose rules, since the occurance of spectrum=y was so low. This is why so many overall rules were made (505,259)
+
+spec.l<- subset(arules, subset = lhs %in% "spectrum=y")
+```
+
+Apriori yeilds 86 rules regarding our target clients. These are patterns in which autism spectrum predicts something else. There were 0 in which autism spectrum was predicted. From our results, we see that a lack of substance abuse is the most frequent pattern.
+
+```{r Spectrum Rules 1, fig.height=8, fig.width=7, message=FALSE, warning=FALSE}
+plot(spec.l, method="grouped", main=" ")
+```
+
+The above plot shows the strength of the rules. Below shows the strength of all the rules. Red, yellow, and green dots mark the strongest rules, while blue and purple are very weak.
+
+```{r Spectrum Rules 2, message=FALSE, warning=FALSE}
+plot(spec.l, measure=c("support", "confidence"), shading="lift", main="Spectrum Association Rules (86 Rules)", col=rainbow(max(size(spec.l))))
+#Any rules in the purple show bad correlations, those in the red are ideal.
+```
+
+```{r Gender, eval=FALSE, include=FALSE}
+sum(a$spectrum=="y")/nrow(a) # %of times spectrum = y in data set
+#Here, we see that those who answered yes in the spectrum only occure in 2.7% of all clients in the dataset.
+sum(a$spectrum=="y"& a$gender=="FEMALE") 
+sum(a$spectrum=="y"& a$gender=="MALE")
+```
+
+It is important to include that females may be under-represented in this model, as they only represent 8 of the 48 clients who are in the autism spectrum. This may be because males are far more likely to suffer from autism then females, according to [autism.org](http://www.autism.org.uk/about/what-is/gender.aspx). 
+
+```{r Top Rules, echo=FALSE, message=FALSE, warning=FALSE}
+arules.df<-as(spec.l, "data.frame")
+top<-subset.data.frame(arules.df, confidence>.7 & lift>1.5)
+top
+```
+
+The rules that were generated appear to have a decent lift, showing that those who are on the spectrum scale are unlikely to suffer from substance abuse. We also conclude that those who score on the spectrum scale:
+
+* suffer from anxiety
+* will be admitted into Wilderness Therapy
+* do not suffer from depression
+* do no have learning disabilities
+
+### The Decision Tree
+
+The data for the training and test datasets will be sampled by stratification to ensure that those within the autism spectrum are well represented. The training data will be a smaller proportion than usual (65%) so that the test data will have an adequate number of those within the autism spectrum, since they only represent 2.67% of the total clients. After many previous analysis, using a minimum split threshold yeilded the most concise output.
+
+```{r Training the Data, echo=FALSE, message=FALSE, warning=FALSE, message=FALSE}
+library(caret)
+#library(kernlab)
+set.seed(1)
+# Creating a stratified sample of spectrum, y is well represented
+TrainingDataIndex <- createDataPartition(a$spectrum, p=0.65, list = FALSE)
+trainingData <- a[TrainingDataIndex,]
+
+#trainingData <- sample_frac(a, 0.75, replace = TRUE)
+testData <- a[-TrainingDataIndex,]
+
+
+DistributionCompare <- cbind(prop.table(table(trainingData$spectrum)), prop.table(table(a$spectrum)))
+colnames(DistributionCompare) <- c("Training", "Orig")
+DistributionCompare
+```
+
+Here, we see that the samples are fairly distributed.
+
+```{r The Decision Tree, message=FALSE, warning=FALSE, include=FALSE}
+library(rpart)
+library(rattle)
+library(rpart.plot)
+library(RColorBrewer)
+```
+
+```{r The Decision Tree 2, echo=FALSE, message=FALSE, warning=FALSE}
+tree <- rpart(spectrum ~., trainingData,control=rpart.control(minsplit=15, cp=0.01, xval=10), method = "class")
+fancyRpartPlot(tree)
+options(digits=4)
+```
+
+```{r Performance 1, echo=FALSE, message=FALSE, warning=FALSE}
+# decision tree predictions
+pred <- predict(tree, testData, type="class")
+
+# confusion matrix
+conf <- table(testData$spectrum, pred)
+conf
+
+# accuracy
+accuracy<-(sum(diag(conf))/sum(conf))
+accuracy
+
+all_probs <- predict(tree, testData, type = "prob")
+precision <- (conf[1,1]/sum(conf[,1]))
+recall <- (conf[1,1]/sum(conf[1,]))
+# probabilities
+probs <- all_probs[,2]
+
+probs <- predict(tree, testData, type = "prob")[,2]
+
+library(ROCR)
+```
+
+Above is the accuracy (% of accurately classified clients). `r accuracy*100`% is very high, however, this is more of a testament to how well the model classifies those who *are not* on the autism spectrum. The following is a better measure of the model's performance. The precision measures the percent of positives labeled correctly, while recall measures the percent of total true positives classified.
+
+```{r Performance 2, message=FALSE, warning=FALSE}
+precision
+recall
+```
+
+They are both poor. This is to say that this model correctly predicts positives `r recall*100`% of the time *and* that the positives that it does predict are only correct `r precision*100`% of the time. This is due to the massive disproportion between clients on the autism spectrum and those who are not. The following plot demonstrates how well true positives are classified (the curve being close to the top left is what is needed).
+
+```{r ROC, echo=FALSE, message=FALSE, warning=FALSE}
+# prediction object
+pred <- prediction(probs, testData$spectrum)
+
+# ROC performance object
+perf <- performance(pred, "tpr", "fpr")
+
+plot(perf)
+# AUC performance object 
+perf1 <- performance(pred, "auc")
+
+perf1@y.values[[1]]
+stopCluster(cl)  
+```
+The Area Under the Receving Operating Characteristic Curve is a measure of the decision trees classification ability, which achieves a value of `r perf1@y.values[[1]]`. This is decent, since the model is very good at predicting when clients are **not** within the autism spectrum.
+
+### Results
+
+We conclude that while those under the autism spectrum are **not likely** to suffer from substance abuse, depression, nor learning disabilities, they **are** likely to suffer from anxiety and to be treated in Wilderness Therapy. 
+
+The decision tree showed that there is a:
+
+* **50%** chance of autism spectum if
+  + male, anxiety issues, not depressed, stayed mid to long at treatment facility
+    + if that, **and** a mid high to high score on the IR test (interpersonal relations), the chance of autism spectrum is **67%**.
+    
+If the decision tree performed better, there would be `r (1-recall)*100`% more positives on the tree. Of what the map yeiled, `r precision*100`% of the positives are correct. However, it classified negatives very well, so the tree is still very accurate at describing what those who are **not** within the autism spectrum.
+
+I recommend that those on the autism spectrum be treated as normal on their cognitive abilities, espectially since there is some patter in them scoring high on the interpersonal relations test. Although they are not likely to be depressed or abuse substances, they are likely to have anxiety issues.
+
