@@ -1,0 +1,150 @@
+---
+title: "Bank Deposit Classifier Analysis"
+author: "Ignacio Faria"
+date: "February 21, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, message=FALSE, warning=FALSE}
+library(plyr)
+library(dplyr)
+library(tidyr)
+library(caret)
+library(kernlab)
+
+getwd()
+setwd("C:/Users/Isaac/Desktop/ITM 6285/Assignment 2/bank")
+```
+
+```{r}
+bankdata<-read.csv("bank.csv", header = T, sep = ";")
+head(bankdata)
+str(bankdata)
+class(bankdata)
+summary(bankdata)
+unique(bankdata[["job"]])
+names(bankdata[,-12])
+bankdata<-bankdata[,-12]
+sum(is.na(bankdata))
+```
+
+```{r}
+trainingData <- sample_frac(bankdata, 0.75, replace = TRUE)
+prop.table(table(trainingData$y))
+
+DistributionCompare <- cbind(prop.table(table(trainingData$y)), prop.table(table(bankdata$y)))
+colnames(DistributionCompare) <- c("Training", "Orig")
+DistributionCompare
+#?gather()
+#gather(DistributionCompare, Training)
+names(bankdata)
+```
+
+```{r}
+set.seed(5825)
+TrainingDataIndex <- createDataPartition(bankdata$y, p=0.75, list = FALSE)
+trainingData <- bankdata[TrainingDataIndex,]
+testData <- bankdata[-TrainingDataIndex,]
+TrainingParameters <- trainControl(method = "cv", number = 3) 
+NoTrainingParameters <- trainControl(method = "none")
+
+```
+
+```{r, message=FALSE, warning=FALSE, include=FALSE}
+DecTreeModel <- train(y ~ ., data = trainingData, 
+                      method = "C5.0",
+                      trControl= TrainingParameters,
+                      na.action = na.omit
+)
+NaiveBayesModel <- train(y ~ ., data = trainingData, 
+                         method = "nb",
+                         trControl= TrainingParameters,
+                         na.action = na.omit
+)
+SupportVectorModel <- train(y ~ ., data = trainingData,
+                 method = "svmPoly",
+                 trControl= NoTrainingParameters,
+                 tuneGrid = data.frame(degree = 1,
+                                       scale = 1,
+                                       C = 1
+                 )
+)
+NeuralNetworkModel <- train(trainingData[,-16], trainingData$y,
+                 method = "nnet",
+                 trControl= NoTrainingParameters,
+                 tuneGrid = data.frame(size = 5,
+                                       decay = 0
+                 )
+                 
+)
+```
+
+```{r}
+DecTreeModel
+NaiveBayesModel
+SupportVectorModel
+NeuralNetworkModel
+```
+
+```{r}
+DTPredictions <-predict(DecTreeModel, testData, na.action = na.pass)
+NBPredictions <-predict(NaiveBayesModel, testData, na.action = na.pass)
+SVMPredictions <-predict(SupportVectorModel, testData)
+NNPredictions <-predict(NeuralNetworkModel, testData)
+```
+
+```{r}
+options(scipen = 99, digits=5)
+options(scipen = 9, digits=5)
+cm.dt <-confusionMatrix(DTPredictions, testData$y)
+cm.nb <-confusionMatrix(NBPredictions, testData$y)
+cm.svm <-confusionMatrix(SVMPredictions, testData$y)
+cm.nn <-confusionMatrix(NNPredictions, testData$y)
+```
+
+```{r}
+cm.dt$overall
+cm.nb$overall
+cm.svm$overall
+cm.nn$overall
+```
+
+```{r}
+cm.byclass<-function(x){
+  v<-(x[["byClass"]])
+  as.numeric(sub("^  $", ",",v))
+}
+
+cm.overall<-function(x){
+  v<-(x[["overall"]])
+  as.numeric(sub("^  $", ",",v))
+}
+r1<-cm.overall(cm.dt)
+r2<-cm.overall(cm.nb)
+r3<-cm.overall(cm.svm)
+r4<-cm.overall(cm.nn)
+table.ov<-rbind(r1,r2,r3,r4)
+acc<-as.data.frame(table.ov[,1])
+colnames(acc)<-"Accuracy"
+
+r1<-cm.byclass(cm.dt)
+r2<-cm.byclass(cm.nb)
+r3<-cm.byclass(cm.svm)
+r4<-cm.byclass(cm.nn)
+table<-rbind.data.frame(r1,r2,r3,r4)
+colnames(table)<-c("Sensitivity", "Specificity", "Pos Pred Value", "Neg Pred Value", "Precision", "Recall","F1", "Prevalence", "Detection Rate", "Detection Prevalence", "Balanced Accuracy")
+rownames(table)<-c("Decision Tree", "Naive Bayes", "Support Vector", "Neural Network")
+table
+names(table)
+table.bc<-dplyr::select(table,Sensitivity, Specificity, Precision)
+performance<-cbind(table.bc, acc)
+performance
+```
+
+
+
+

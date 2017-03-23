@@ -1,0 +1,146 @@
+---
+title: "Nutritional Content Food Product Clustering"
+author: "Ignacio Faria"
+date: "March 12, 2017"
+output:
+  word_document: default
+  html_document: default
+
+---
+
+Food products differ greatly and one way to assess similarities is by clustering.  The following data is an analysis of 49 different food products, described by 52 *per serving* attributes (i.e. caffeine, carbohydrates, cholesterol, etc.).  The data was imported from openfoodfacts.org and cleaned.
+
+```{r, include=FALSE}
+
+library(cluster)
+library(ggplot2)
+library(dendextend)
+library(dplyr)
+library(NbClust)
+
+setwd("C:/Users/Isaac/Desktop/ITM 6285/Assignment 3")
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+ProductData <- read.csv("products2.csv", na.strings = "undefined",colClasses = c("character", "character", rep("numeric", 48)))
+# Delete first column
+ProductData$prodid <-NULL
+# Select Product Data Subset that has less than 25 NA's
+ProdDataSubset <- ProductData[rowSums(is.na(ProductData))<25,] # consider raising
+
+# Remove duplicates
+CleanProductData <- ProdDataSubset %>% distinct(prodname, .keep_all = TRUE)
+
+# Set NA's to zero
+CleanProductData[is.na(CleanProductData)] <- 0
+# Set productname as row names
+rownames(CleanProductData) <- CleanProductData[,1]
+CleanProductData$prodname <- NULL
+no<-colSums(CleanProductData)==0
+```
+
+```{r, echo=FALSE}
+CPD <- CleanProductData[,no==F]
+# Scale the data
+SPD <- scale(CPD, center=T, scale=T)
+```
+
+The data was modeled into an Agnes dendrogram.  Because it is a hierarchical agglomerative clustering model, we can see where the clusters converge in similarity.
+
+```{r, echo=FALSE, fig.height=7, fig.width=7}
+# Calculate distance matrix. Many clustering algorithms need dist matrix as input
+Pdist <- dist(SPD, method = "euclidean")
+
+# Create hierachical cluster, agnes automatically creates dist matrix so feed raw data
+Pclusters <- agnes(SPD, method = "complete", metric = "euclidean")
+plot(Pclusters, which.plots=2, cex = .8, crt=45, main="Clustering Tree of Foods")
+```
+
+In order to determine the optimal number of clusters for the k-means algorithm to produce, a series of indexing criterion must be observed. The following determines the optimal number of clusters, by checking how well each method clusters the data, from 2 to 20 clusters.
+
+
+```{r}
+# 
+list.m= c("kl", "ch", "hartigan","mcclain", "gamma", "gplus",
+                  "tau", "dunn", "sdindex", "sdbw", "cindex", "silhouette",
+                  "ball","ptbiserial", "gap","frey")
+tab.bk = as.data.frame(matrix(nrow =length(list.m), ncol=2))
+for(i in 1:length(list.m)){
+
+nb = NbClust(SPD, min.nc = 2, max.nc = 20, 
+               method = "complete", 
+             index =list.m[i])
+tab.bk[i,2] =  nb$Best.nc[1]
+tab.bk[i,1] = list.m[i]
+}
+tab.bk
+```
+
+The fewer the clusters, the easier it is to identify differences. I chose the sdindex, since it is the most recent method as of the year 2000 and 7 clusters seems reasonable. 
+
+K-means performance can be measured by *total sum of squares within* and *between* clusters. Using this as a metric $\left(\frac{Within}{Between}\right)$, their performance was plotted (the lower the better).
+
+```{r}
+k<-seq(3,18,1)
+kmeasure<-numeric(length(k))
+for (i in seq_along(k)){SPDkmeans <- kmeans(SPD, i, nstart = 1)
+kmeasure[i]<-SPDkmeans$tot.withinss/SPDkmeans$betweenss}
+kmeasure
+plot(k, kmeasure, ylim=c(0,4),xaxt="n", main="K by distance measures")
+axis(1, at = seq(1, 18, by = 1), las=2)
+
+plot(k[3:8], kmeasure[3:8], ylim=c(0,2),xaxt="n", main="K by distance measures")
+axis(1, at = seq(5, 10, by = 1), las=2)
+#k appears best at 8
+```
+
+By this measure, it would appear that 8 clusters is the best; it is sufficiently small while having the largest drop in this metric. Previous analysis showed that 8 was not, however, the best k. It separated cereals into another cluster, added nuts into the dairy cluster, and was subjectivly less informative than 7 clusters.
+
+The following table shows how the products were grouped.
+
+```{r}
+SPDkmeans <- kmeans(SPD, 7, nstart = 1)
+```
+
+```{r}
+sep<-SPDkmeans[["cluster"]]
+sep<-as.data.frame(sep)
+sep<-tibble::rownames_to_column(sep)
+str(sep)
+colnames(sep)<-c("Food","Group")
+tab1<-arrange(sep,Group)
+tab1
+```
+
+The clusters appear to be well defined:
+
+* Group 1 is just a protein bar
+* Group 2 contains dairy products, eggs, and soy milk
+* Group 3 is high-sugar cereals
+* Group 4 is wheat cereals
+* Group 5 is healthy cereals
+* Group 6 is nuts
+* Group 7 high fatty content foods, with the exception of Apricots.
+
+The following Kohonen Self Organizing Map gives a 2 dimentional view of these groupings. This is a supervised version of the KSOM, that measures the distance of an object as a sum of separate distances for X and Y spaces.
+
+```{r, message=FALSE, warning=FALSE, fig.width=6, fig.height=4.5}
+library(kohonen)
+kohmap2 <- xyf(SPD, classvec2classmat(tab1$Group),
+              grid = somgrid(6, 7, "hexagonal"), rlen=100)
+xyfpredictions2 <- classmat2classvec(predict(kohmap2)$unit.predictions)
+
+bgcols <- c("lightgray", "lightpink", "lightyellow","lightgreen", "beige", "lightblue", "orange")
+
+plot(kohmap2, type="mapping", 
+     pchs = tab1[["Group"]], bgcol = bgcols[as.integer(xyfpredictions2)], 
+     main = "Gray=1, Pink=2, Yellow=3, Green=4, Beige=5, Blue=6, Orange=7")
+```
+
+The plot above shows the effectiveness of the clustering, with only group 4 and group 7 (green and orange) having only 1 non-adjacent member. My guess is that the outlying member is apricots (group 7) because it has a high sugar content and is close to cereal, and the other outling group 4 member is a cereal with a high fat content.
+
+```{r fig.width=4, fig.height=4}
+plot(kohmap2, type="codes", main = c("Codes X", "Codes Y"),bgcol = bgcols[as.integer(xyfpredictions2)])
+```
+
+These code plots describe the vectors for X and Y. The lines on the Codes X plot show similarities within groups, while the Codes Y plot show the main uniting attributes that define each group.
