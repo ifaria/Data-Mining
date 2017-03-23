@@ -1,0 +1,307 @@
+---
+title: "Deposit Account Classifier Analysis"
+author: "Ignacio Faria"
+date: "February 26, 2017"
+output:
+  html_document: default
+  pdf_document: default
+  word_document: default
+---
+
+Direct telemarketing campaigns are expensive and time consuming; in an effort to minimize costs, we will take a data-driven approach to identifying potential customers. Using basic demographic variables and financial history, we will investigate past clients and predict if they will open a term deposit account or not. To do this, we will be using four classlifiers: decision tree, naive bayes, support vector machines, and neural networks. The success of these classifers will be measured by their recall and weighted F-test scores.
+
+
+```{r, message=FALSE, warning=FALSE, include=FALSE}
+library(plyr)
+library(dplyr)
+library(tidyr)
+library(caret)
+library(kernlab)
+library(C50)
+library(e1071)
+library(klaR)
+library(MASS)
+library(kernlab)
+library(doParallel)
+
+getwd()
+setwd("C:/Users/Isaac/Desktop/ITM 6285/Assignment 2/bank")
+detectCores()
+Cluster<-makeCluster(3)
+registerDoParallel(Cluster)
+```
+#Exploratory Analysis
+
+The data can be collected from the [University of California, Irivne, Machine Learning Repository](https://archive.ics.uci.edu/ml/datasets/Bank+Marketing). Preliminary to the analysis, we know the following about the data:
+
+* 45,211 phone calls were made between May 2008 and November 2010 (often times, more than one phone call to a potential client).
+
+* 17 different attributes were contained in the original dataset, including age, job type, day of the last contact, financial history, and the dependent variable; **did the client open an account or not**.
+
+* *Duration* is an overly correlated attribute with our prediction variable, so it must be removed.
+
+```{r}
+bankdata<-read.csv("bank.csv", header = T, sep = ";")
+bankdata<-bankdata[,-12] #removing duration
+str(bankdata)
+head(bankdata)
+summary(bankdata)
+summary(bankdata[["job"]])
+sum(is.na(bankdata))
+
+```
+Initial analysis shows that there are no missing values and that `balance`, `campaign`, `pdays`, and `previous` have high outlying maximum values.
+
+It is important to consider how R reads factor values, specifically, the **y** variable.
+
+```{r}
+str(bankdata$y)
+head(bankdata$y)
+```
+
+R codes factors with different inherent rankings based on alphabetic values (when no value ranking is given). Because of this, `no` is ranked at 1 and `yes` is 2. When we run these algorithms based on this ranking, R incorrectly records (on a confusion matrix) that a predicted `no` and an actual `no` is a **true positive** when in fact it is a **true negative**.  Because of this, the level rankings must be reversed. If this is not done, the output confusion matrix will say **'Positive' Class : no**.
+
+```{r, echo=TRUE, message=FALSE, warning=FALSE}
+bankdata$y<-factor(bankdata$y, levels = rev(levels(bankdata$y)))
+str(bankdata$y)
+head(bankdata$y)
+```
+Upon this reversal, the values of **Sensitivity** and **Specificity** are *reversed*. This directly effects the values of  **Precision** and **Recall**. After the reversal, the confusion matrix will correctly say **'Positive' Class : yes**. 
+
+The next step is to remove *correlated* attributes, as well as attributes with *near-zero variance*. The former is to remove redundant data from the analysis, while the latter removes attributes that add nothing to the predictability of our response variable.
+
+```{r, include=FALSE}
+nomvar <- c(2:5, 7:11,15,16)
+corrMatrix <- cor(bankdata[,-nomvar], use = "pairwise.complete.obs")
+table(is.na(corrMatrix))
+nzv <- nearZeroVar(bankdata)
+names(bankdata[,nzv])
+bankdata <- bankdata[,-nzv]
+```
+
+We observe that there are no correlated numeric attributes, and that two attributes have *near-zero variability*. These are `default` and `pdays`, which are respectively: does the client have credit in default and number of days that pass after the client was last contacted from a previous campaign.
+
+# Training the Models
+
+To train the models (decision tree, naive bayes, support vector machines, and neural networks), we randomly select 75% of the total data as the training set, leaving the remainding 25% to be tested against. The decision tree and naive bayes model will be folded 9 times. Preliminary analysis showed that a 10-fold training method on SVM and NN models added no predictability to the model, and greatly lowered the recall of the decision tree. Preliminary analysis also showed that the naive bayes model performs better with a laplace estimator of 1.
+
+```{r, include=FALSE}
+set.seed(5825)
+TrainingDataIndex <- createDataPartition(bankdata$y, p=0.75, list = FALSE)
+trainingData <- bankdata[TrainingDataIndex,]
+testData <- bankdata[-TrainingDataIndex,]
+TrainingParameters <- trainControl(method = "cv", number = 9) 
+NoTrainingParameters <- trainControl(method = "none")
+```
+
+
+```{r, message=FALSE, warning=FALSE, include=FALSE}
+DecTreeModel <- train(y ~ ., data = trainingData, 
+                      method = "C5.0",
+                      trControl= TrainingParameters,
+                      na.action = na.omit
+)
+NaiveBayesModel <- train(y ~ ., data = trainingData, 
+                         method = "nb",
+                         trControl = TrainingParameters,
+                         tuneGrid = data.frame(fL=1, usekernel=FALSE, adjust=FALSE),
+                         na.action = na.omit
+)
+SupportVectorModel <- train(y ~ ., data = trainingData,
+                 method = "svmPoly",
+                 trControl= NoTrainingParameters,
+                 tuneGrid = data.frame(degree = 1,
+                                       scale = 1,
+                                       C = 1
+                 )
+)
+NeuralNetworkModel <- train(y ~ ., data = trainingData,
+                 method = "nnet",
+                 trControl= NoTrainingParameters,
+                 tuneGrid = data.frame(size = 5,
+                                       decay = 0
+                 )
+                 
+)
+```
+
+```{r, message=FALSE, warning=FALSE, include=FALSE}
+DTPredictions <-predict(DecTreeModel, testData, na.action = na.pass)
+NBPredictions <-predict(NaiveBayesModel, testData, na.action = na.pass)
+SVMPredictions <-predict(SupportVectorModel, testData)
+NNPredictions <-predict(NeuralNetworkModel, testData)
+```
+
+```{r, message=FALSE, warning=FALSE, include=FALSE}
+cm<-(function(x){confusionMatrix(x, testData$y)})
+
+cm.byclass<-function(x){
+  x_measures <- (x[["byClass"]])
+  clean_vector <- as.numeric(sub("^  $", ",",x_measures))
+  clean_vector
+}
+```
+```{r, message=FALSE, warning=FALSE, include=FALSE}
+cm.overall<-function(x){
+  x_accuracy <- (x[["overall"]])
+  clean_vector1 <- as.numeric(sub("^  $", ",",x_accuracy))
+  clean_vector1
+}
+```
+
+```{r, message=FALSE, warning=FALSE, include=FALSE}
+cm.dt <-cm(DTPredictions)
+cm.nb <-cm(NBPredictions)
+cm.svm <-cm(SVMPredictions)
+cm.nn <-cm(NNPredictions)
+```
+
+
+```{r, message=FALSE, warning=FALSE, include=FALSE}
+r1<-cm.overall(cm.dt)
+r2<-cm.overall(cm.nb)
+r3<-cm.overall(cm.svm)
+r4<-cm.overall(cm.nn)
+table.ov<-rbind(r1,r2,r3,r4)
+acc<-as.data.frame(table.ov[,1])
+colnames(acc)<-"Accuracy"
+
+r1<-cm.byclass(cm.dt)
+r2<-cm.byclass(cm.nb)
+r3<-cm.byclass(cm.svm)
+r4<-cm.byclass(cm.nn)
+table<-rbind.data.frame(r1,r2,r3,r4)
+colnames(table)<-c("Sensitivity", "Specificity", "Pos Pred Value", "Neg Pred Value", "Precision", "Recall","F1", "Prevalence", "Detection Rate", "Detection Prevalence", "Balanced Accuracy")
+rownames(table)<-c("Decision Tree", "Naive Bayes", "Support Vector", "Neural Network")
+table
+names(table)
+table.bc<-dplyr::select(table,Sensitivity, Specificity, Precision)
+performance<-cbind(table.bc, acc)
+```
+
+```{r}
+performance
+```
+
+Recall (which is also **Sensitivity**) is the most important of the measures, because it includes **False Negatives**, which is the probability that we predict that a customer will *not buy*, given that they will. This is particuarly important, because we would rather incorrectly predict a potential client than overlook one that may be interested. Because Recall is the most important measure, the naive bayes model does the best at predicting potential customers.
+
+
+```{r, include=FALSE}
+w.Ftest<-function(metrics, B=1){
+  ((1+B^2)*metrics[["Precision"]]*metrics[["Sensitivity"]])/
+    ((B^2)*metrics[["Precision"]]+metrics[["Sensitivity"]])
+}
+f0<-w.Ftest(performance,.25)
+f1<-w.Ftest(performance,.5)
+f2<-w.Ftest(performance,1)
+f3<-w.Ftest(performance,2)
+f4<-w.Ftest(performance,4)
+ftable<-rbind(f0,f1,f2,f3,f4)
+colnames(ftable)<-c("Decision Tree", "Naive Bayes", "Support Vector", "Neural Network")
+rownames(ftable)<-c("B=0.25","B=0.5", "B=1", "B=2","B=4")
+```
+```{r}
+ftable
+```
+By placing more emphasis on **False negatives**, we choose a $\beta>1$. Whenever $\beta>1$, the naive bayes algorithm remains the best classifier for this data.
+
+The following tables run the same models, but with only the principal components.
+
+```{r, message=FALSE, warning=FALSE, include=FALSE}
+PCADecTreeModel <- train(y ~ ., data = trainingData, 
+                      method = "C5.0",
+                      trControl= TrainingParameters,
+                      na.action = na.omit,
+                      allowParallel = T,
+                      preProcess = "pca"
+)
+
+PCANaiveBayesModel <- train(y ~ ., data = trainingData, 
+                         method = "nb",
+                         trControl = TrainingParameters,
+                         tuneGrid = data.frame(fL=1, usekernel=FALSE, adjust=FALSE),
+                         na.action = na.omit,
+                         preProcess = "pca"
+)
+
+
+PCASupportVectorModel <- train(y ~ ., data = trainingData,
+                            method = "svmPoly",
+                            trControl= TrainingParameters,
+                            tuneGrid = data.frame(degree = 1,
+                                                  scale = 1,
+                                                  C = 1
+                            ),
+                            allowParallel = T,
+                            preProcess = "pca"
+)
+PCANeuralNetworkModel <- train(y ~ ., data = trainingData,
+                            method = "nnet",
+                            trControl= NoTrainingParameters,
+                            tuneGrid = data.frame(size = 5,
+                                                  decay = 0
+                            ),
+                            allowParallel = T,
+                            preProcess = "pca"
+                            
+)
+```
+```{r, message=FALSE, warning=FALSE, include=FALSE}
+PCADecTreeModel
+PCANaiveBayesModel
+PCASupportVectorModel
+PCANeuralNetworkModel
+```
+```{r, message=FALSE, warning=FALSE, include=FALSE}
+PCADTPredictions <-predict(PCADecTreeModel, testData)
+PCANBPredictions <-predict(PCANaiveBayesModel, testData)
+PCASVMPredictions <-predict(PCASupportVectorModel, testData)
+PCANNPredictions <-predict(PCANeuralNetworkModel, testData)
+```
+```{r, message=FALSE, warning=FALSE, include=FALSE}
+cm.dt.pca <-cm(PCADTPredictions)
+cm.nb.pca <-cm(PCANBPredictions)
+cm.svm.pca <-cm(PCASVMPredictions)
+cm.nn.pca <-cm(PCANNPredictions)
+```
+```{r, message=FALSE, warning=FALSE, include=FALSE}
+r1<-cm.overall(cm.dt.pca)
+r2<-cm.overall(cm.nb.pca)
+r3<-cm.overall(cm.svm.pca)
+r4<-cm.overall(cm.nn.pca)
+table.ov.pca<-rbind(r1,r2,r3,r4)
+acc.pca<-as.data.frame(table.ov.pca[,1])
+colnames(acc.pca)<-"Accuracy"
+
+r1<-cm.byclass(cm.dt.pca)
+r2<-cm.byclass(cm.nb.pca)
+r3<-cm.byclass(cm.svm.pca)
+r4<-cm.byclass(cm.nn.pca)
+table.pca<-rbind.data.frame(r1,r2,r3,r4)
+colnames(table.pca)<-c("Sensitivity", "Specificity", "Pos Pred Value", "Neg Pred Value", "Precision", "Recall","F1", "Prevalence", "Detection Rate", "Detection Prevalence", "Balanced Accuracy")
+rownames(table.pca)<-c("Decision Tree", "Naive Bayes", "Support Vector", "Neural Network")
+table.bc.pca<-dplyr::select(table.pca,Sensitivity, Specificity, Precision)
+performance.pca<-cbind(table.bc.pca, acc)
+f0<-w.Ftest(performance.pca,.25)
+f1<-w.Ftest(performance.pca,.5)
+f2<-w.Ftest(performance.pca,1)
+f3<-w.Ftest(performance.pca,2)
+f4<-w.Ftest(performance.pca,4)
+ftable.pca<-rbind(f0,f1,f2,f3,f4)
+colnames(ftable.pca)<-c("Decision Tree", "Naive Bayes", "Support Vector", "Neural Network")
+rownames(ftable.pca)<-c("B=0.25","B=0.5", "B=1", "B=2","B=4")
+```
+```{r}
+performance.pca;ftable.pca
+
+stopCluster(Cluster)
+```
+# Results
+
+The tables conclude that **recall** is less in every model, while **specificity** hardly changes. We conclude that keeping only the princial components weakened the model, and that the naive bayes model best classifies potential customers.
+
+```{r}
+cm.nb[[2]]
+```
+The model has a recall of .454, which may seem very low, but is a reflection that most phone calls *do not* end in a sale. If sales occured more frequntly, we would expect to have a much higher recall. I would like to include that these data lacked a complete date (days and months were only recorded). Including the year may have helped strengthen the predictability of response variable. Because of this, the date variables were labeled poorly; days were viewed as numeric and months as a factor. They are also distributed very oddly, with May having nearly a fourth of the total calls.
+
